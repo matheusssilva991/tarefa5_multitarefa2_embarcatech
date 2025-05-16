@@ -38,6 +38,7 @@ typedef enum
 void vJoystickTask(void *pvParameters);            // Task para leitura do joystick
 void vDisplayTask(void *pvParameters);             // Task para exibição no display
 void vLedRGBTask(void *pvParameters);              // Task para controle do LED RGB
+void vBuzzerTask(void *pvParameters);              // Task para controle do buzzer
 void gpio_irq_handler(uint gpio, uint32_t events); // Função de interrupção para o botão B
 void calculate_flood_percentages(
     joystick_data_t *joydata,
@@ -59,12 +60,13 @@ int main()
     stdio_init_all();
 
     // Cria a fila para compartilhamento de valor do joystick
-    xQueueJoystickData = xQueueCreate(5, sizeof(joystick_data_t));
+    xQueueJoystickData = xQueueCreate(7, sizeof(joystick_data_t));
 
     // Criação das tasks
-    xTaskCreate(vJoystickTask, "Joystick Task", 256, NULL, 1, NULL);
-    xTaskCreate(vDisplayTask, "Display Task", 512, NULL, 1, NULL);
+    xTaskCreate(vJoystickTask, "Joystick Task", 256, NULL, 2, NULL);
+    xTaskCreate(vDisplayTask, "Display Task", 512, NULL, 2, NULL);
     xTaskCreate(vLedRGBTask, "LED RGB Task", 256, NULL, 1, NULL);
+    xTaskCreate(vBuzzerTask, "Buzzer Task", 256, NULL, 1, NULL);
 
     // Inicia o agendador
     vTaskStartScheduler();
@@ -137,7 +139,7 @@ void vDisplayTask(void *params)
             {
                 color = true;                                     // Reseta a cor
                 ssd1306_rect(&ssd, 0, 0, 128, 64, color, !color); // Desenha o retângulo
-                ssd1306_rect(&ssd, 2, 2, 124, 60, color, !color);  // Desenha o retângulo
+                ssd1306_rect(&ssd, 2, 2, 124, 60, color, !color); // Desenha o retângulo
                 draw_centered_text(&ssd, "NORMAL", 5);            // Exibe normal
             }
 
@@ -173,11 +175,53 @@ void vLedRGBTask(void *params)
             flood_status = get_flood_alert_status(rain_volume_percent, water_level_percent);
 
             if (flood_status == STATUS_ALERT)
+            {
                 set_led_red(); // Acende o LED vermelho
+                vTaskDelay(pdMS_TO_TICKS(100)); // Aguarda 100ms
+                turn_off_leds(); // Desliga os LEDs
+                vTaskDelay(pdMS_TO_TICKS(100)); // Aguarda 100ms
+            }
             else
                 set_led_green(); // Acende o LED verde
         }
         vTaskDelay(pdMS_TO_TICKS(50)); // Atualiza a cada 50ms
+    }
+}
+
+// Task para controle do buzzer
+void vBuzzerTask(void *params)
+{
+    joystick_data_t joydata;
+    float rain_volume_percent = 0.0f;
+    float water_level_percent = 0.0f;
+    flood_status_t flood_status = STATUS_NORMAL;
+    bool buzzer_on = false;
+
+    init_buzzer(BUZZER_A_PIN, 4.0f); // Inicializa o buzzer
+
+    while (true)
+    {
+        if (xQueueReceive(xQueueJoystickData, &joydata, portMAX_DELAY) == pdTRUE)
+        {
+            // Verifica o status de cheia/inundação
+            calculate_flood_percentages(&joydata, &rain_volume_percent, &water_level_percent);
+            flood_status = get_flood_alert_status(rain_volume_percent, water_level_percent);
+
+            if (flood_status == STATUS_ALERT)
+            {
+                play_tone(BUZZER_A_PIN, 450);
+                vTaskDelay(pdMS_TO_TICKS(100));
+                stop_tone(BUZZER_A_PIN);
+                vTaskDelay(pdMS_TO_TICKS(100));
+                buzzer_on = true; // Buzzer ligado
+            }
+            else if (buzzer_on)
+            {
+                stop_tone(BUZZER_A_PIN);        // Para o buzzer
+                vTaskDelay(pdMS_TO_TICKS(100)); // Atualiza a cada 100ms
+                buzzer_on = false; // Buzzer desligado
+            }
+        }
     }
 }
 
