@@ -20,17 +20,20 @@
 
 #define ADC_JOYSTICK_X 26
 #define ADC_JOYSTICK_Y 27
-#define LED_BLUE 12
-#define LED_GREEN 11
 #define tam_quad 10
 
-// Estrutura para armazenar os dados do joystick
-// (posição X e Y)
+// Estruturas de dados
 typedef struct
 {
     uint16_t x_pos;
     uint16_t y_pos;
-} joystick_data_t;
+} joystick_data_t; // Estrutura para armazenar os dados do joystick
+
+typedef enum
+{
+    STATUS_NORMAL,
+    STATUS_ALERT
+} flood_status_t; // Enumeração para o status de cheia/inundação
 
 // Protótipos das funções
 void vJoystickTask(void *pvParameters);            // Task para leitura do joystick
@@ -38,6 +41,13 @@ void vDisplayTask(void *pvParameters);             // Task para exibição no di
 void vLedGreenTask(void *pvParameters);            // Task para controle do LED verde
 void vLedBlueTask(void *pvParameters);             // Task para controle do LED azul
 void gpio_irq_handler(uint gpio, uint32_t events); // Função de interrupção para o botão B
+void calculate_flood_percentages(
+    joystick_data_t *joydata,
+    float *rain_volume_percent,
+    float *water_level_percent); // Função para calcular a porcentagem de água e chuva
+flood_status_t get_flood_alert_status(
+    uint16_t rain_level_raw,
+    uint16_t water_level_raw); // Função para verificar o status de cheia/inundação
 
 // Variáveis globais
 QueueHandle_t xQueueJoystickData; // Fila para compartilhar dados do joystick
@@ -96,32 +106,54 @@ void vJoystickTask(void *params)
 void vDisplayTask(void *params)
 {
     ssd1306_t ssd;
+    joystick_data_t joydata;
+    bool color = true;
+    float rain_volume_percent = 0.0f;
+    float water_level_percent = 0.0f;
+    char water_level_str[10];
+    char rain_volume_str[10];
+    flood_status_t flood_status = STATUS_NORMAL;
+
     init_display(&ssd); // Inicializa o display
 
-    joystick_data_t joydata;
-    bool cor = true;
     while (true)
     {
         if (xQueueReceive(xQueueJoystickData, &joydata, portMAX_DELAY) == pdTRUE)
         {
-            uint8_t x = (joydata.x_pos * (128 - tam_quad)) / 4095;
-            uint8_t y = (joydata.y_pos * (64 - tam_quad)) / 4095;
-            y = (64 - tam_quad) - y;                                 // Inverte o eixo Y
-            ssd1306_fill(&ssd, !cor);                                // Limpa a tela
-            ssd1306_rect(&ssd, y, x, tam_quad, tam_quad, cor, !cor); // Quadrado 5x5
+            // Verifica o status de cheia/inundação
+            calculate_flood_percentages(&joydata, &rain_volume_percent, &water_level_percent);
+            flood_status = get_flood_alert_status(rain_volume_percent, water_level_percent);
+
+            snprintf(water_level_str, sizeof(water_level_str), "%.2f%%", water_level_percent);
+            snprintf(rain_volume_str, sizeof(rain_volume_str), "%.2f%%", rain_volume_percent);
+
+            ssd1306_fill(&ssd, !color);                        // Limpa a tela
+            ssd1306_rect(&ssd, 0, 0, 128, 64, color, false);    // Desenha o retângulo
+            ssd1306_draw_string(&ssd, "N. Agua:", 5, 18);      // Exibe o título
+            ssd1306_draw_string(&ssd, water_level_str, 5, 28); // Exibe o nível de água
+            ssd1306_draw_string(&ssd, "V. chuva:", 5, 42);     // Exibe o título
+            ssd1306_draw_string(&ssd, rain_volume_str, 5, 52); // Exibe o volume de chuva
+
+            if (flood_status == STATUS_ALERT)
+                draw_centered_text(&ssd, "!! ALERTA !!", 4); // Exibe alerta
+            else
+                draw_centered_text(&ssd, "NORMAL", 4); // Exibe normal
+
             ssd1306_send_data(&ssd);
         }
+
+        vTaskDelay(pdMS_TO_TICKS(100)); // Atualiza a cada 100ms
     }
 }
 
 // Task para controle do LED verde
 void vLedGreenTask(void *params)
 {
-    gpio_set_function(LED_GREEN, GPIO_FUNC_PWM);   // Configura GPIO como PWM
-    uint slice = pwm_gpio_to_slice_num(LED_GREEN); // Obtém o slice de PWM
-    pwm_set_wrap(slice, 100);                      // Define resolução (0–100)
-    pwm_set_chan_level(slice, PWM_CHAN_B, 0);      // Duty inicial
-    pwm_set_enabled(slice, true);                  // Ativa PWM
+    gpio_set_function(GREEN_LED_PIN, GPIO_FUNC_PWM);   // Configura GPIO como PWM
+    uint slice = pwm_gpio_to_slice_num(GREEN_LED_PIN); // Obtém o slice de PWM
+    pwm_set_wrap(slice, 100);                          // Define resolução (0–100)
+    pwm_set_chan_level(slice, PWM_CHAN_B, 0);          // Duty inicial
+    pwm_set_enabled(slice, true);                      // Ativa PWM
 
     joystick_data_t joydata;
     while (true)
@@ -129,10 +161,10 @@ void vLedGreenTask(void *params)
         if (xQueueReceive(xQueueJoystickData, &joydata, portMAX_DELAY) == pdTRUE)
         {
             // Brilho proporcional ao desvio do centro
-            int16_t desvio_centro = (int16_t)joydata.x_pos - 2000;
-            if (desvio_centro < 0)
-                desvio_centro = -desvio_centro;
-            uint16_t pwm_value = (desvio_centro * 100) / 2048;
+            int16_t center_desviation = (int16_t)joydata.x_pos - 2000;
+            if (center_desviation < 0)
+                center_desviation = -center_desviation;
+            uint16_t pwm_value = (center_desviation * 100) / 2048;
             pwm_set_chan_level(slice, PWM_CHAN_B, pwm_value);
         }
         vTaskDelay(pdMS_TO_TICKS(50)); // Atualiza a cada 50ms
@@ -142,11 +174,11 @@ void vLedGreenTask(void *params)
 // Task para controle do LED azul
 void vLedBlueTask(void *params)
 {
-    gpio_set_function(LED_BLUE, GPIO_FUNC_PWM);   // Configura GPIO como PWM
-    uint slice = pwm_gpio_to_slice_num(LED_BLUE); // Obtém o slice de PWM
-    pwm_set_wrap(slice, 100);                     // Define resolução (0–100)
-    pwm_set_chan_level(slice, PWM_CHAN_A, 0);     // Duty inicial
-    pwm_set_enabled(slice, true);                 // Ativa PWM
+    gpio_set_function(BLUE_LED_PIN, GPIO_FUNC_PWM);   // Configura GPIO como PWM
+    uint slice = pwm_gpio_to_slice_num(BLUE_LED_PIN); // Obtém o slice de PWM
+    pwm_set_wrap(slice, 100);                         // Define resolução (0–100)
+    pwm_set_chan_level(slice, PWM_CHAN_A, 0);         // Duty inicial
+    pwm_set_enabled(slice, true);                     // Ativa PWM
 
     joystick_data_t joydata;
     while (true)
@@ -154,12 +186,33 @@ void vLedBlueTask(void *params)
         if (xQueueReceive(xQueueJoystickData, &joydata, portMAX_DELAY) == pdTRUE)
         {
             // Brilho proporcional ao desvio do centro
-            int16_t desvio_centro = (int16_t)joydata.y_pos - 2048;
-            if (desvio_centro < 0)
-                desvio_centro = -desvio_centro;
-            uint16_t pwm_value = (desvio_centro * 100) / 2048;
+            int16_t center_deviation = (int16_t)joydata.y_pos - 2048;
+            if (center_deviation < 0)
+                center_deviation = -center_deviation;
+            uint16_t pwm_value = (center_deviation * 100) / 2048;
             pwm_set_chan_level(slice, PWM_CHAN_A, pwm_value);
         }
         vTaskDelay(pdMS_TO_TICKS(50)); // Atualiza a cada 50ms
     }
+}
+
+// Função para calcular a porcentagem de água e chuva
+void calculate_flood_percentages(joystick_data_t *joydata, float *rain_volume_percent, float *water_level_percent)
+{
+    // Considerando joystick centralizado em 2048, normaliza para 0~4095
+    uint16_t rain_level = (joydata->x_pos > 2048) ? (joydata->x_pos - 2048) * 2 : (2048 - joydata->x_pos) * 2;
+    uint16_t water_level = (joydata->y_pos > 2048) ? (joydata->y_pos - 2048) * 2 : (2048 - joydata->y_pos) * 2;
+
+    // Calcula o nível da água e o volume de chuva em porcentagem
+    *rain_volume_percent = (rain_level / 4095.0f) * 100.0f;
+    *water_level_percent = (water_level / 4095.0f) * 100.0f;
+}
+
+// Função para tratar os dados do joystick e verificar o status de cheia/inundação
+flood_status_t get_flood_alert_status(uint16_t rain_volume_percent, uint16_t water_level_percent)
+{
+    if (water_level_percent >= 70.0f || rain_volume_percent >= 80.0f)
+        return STATUS_ALERT;
+    else
+        return STATUS_NORMAL;
 }
