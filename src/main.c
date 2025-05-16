@@ -181,10 +181,11 @@ void vLedRGBTask(void *params)
                 turn_off_leds(); // Desliga os LEDs
                 vTaskDelay(pdMS_TO_TICKS(100)); // Aguarda 100ms
             }
-            else
+            else {
                 set_led_green(); // Acende o LED verde
+                vTaskDelay(pdMS_TO_TICKS(100)); // Aguarda 100ms
+            }
         }
-        vTaskDelay(pdMS_TO_TICKS(50)); // Atualiza a cada 50ms
     }
 }
 
@@ -198,6 +199,7 @@ void vBuzzerTask(void *params)
     bool buzzer_on = false;
 
     init_buzzer(BUZZER_A_PIN, 4.0f); // Inicializa o buzzer
+    init_buzzer(BUZZER_B_PIN, 4.0f); // Inicializa o buzzer
 
     while (true)
     {
@@ -207,17 +209,34 @@ void vBuzzerTask(void *params)
             calculate_flood_percentages(&joydata, &rain_volume_percent, &water_level_percent);
             flood_status = get_flood_alert_status(rain_volume_percent, water_level_percent);
 
-            if (flood_status == STATUS_ALERT)
+            if (water_level_percent >= 70.0f && rain_volume_percent >= 80.0f)
             {
-                play_tone(BUZZER_A_PIN, 450);
+                play_tone(BUZZER_A_PIN, 784);
+                play_tone(BUZZER_B_PIN, 450);
+                vTaskDelay(pdMS_TO_TICKS(100));
+                stop_tone(BUZZER_A_PIN);
+                stop_tone(BUZZER_B_PIN);
+                vTaskDelay(pdMS_TO_TICKS(100));
+                buzzer_on = true; // Buzzer ligado
+            }
+            else if (rain_volume_percent >= 80.0f) {
+                play_tone(BUZZER_A_PIN, 784);
                 vTaskDelay(pdMS_TO_TICKS(100));
                 stop_tone(BUZZER_A_PIN);
                 vTaskDelay(pdMS_TO_TICKS(100));
                 buzzer_on = true; // Buzzer ligado
             }
+            else if (water_level_percent >= 70.0f) {
+                play_tone(BUZZER_B_PIN, 450);
+                vTaskDelay(pdMS_TO_TICKS(100));
+                stop_tone(BUZZER_B_PIN);
+                vTaskDelay(pdMS_TO_TICKS(100));
+                buzzer_on = true; // Buzzer ligado
+            }
             else if (buzzer_on)
             {
-                stop_tone(BUZZER_A_PIN);        // Para o buzzer
+                stop_tone(BUZZER_A_PIN); // Para o buzzer
+                stop_tone(BUZZER_B_PIN); // Para o buzzer
                 vTaskDelay(pdMS_TO_TICKS(100)); // Atualiza a cada 100ms
                 buzzer_on = false; // Buzzer desligado
             }
