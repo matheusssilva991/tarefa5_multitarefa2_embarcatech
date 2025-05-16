@@ -39,6 +39,7 @@ void vJoystickTask(void *pvParameters);            // Task para leitura do joyst
 void vDisplayTask(void *pvParameters);             // Task para exibição no display
 void vLedRGBTask(void *pvParameters);              // Task para controle do LED RGB
 void vBuzzerTask(void *pvParameters);              // Task para controle do buzzer
+void vLedMatrixTask(void *pvParameters);           // Task para controle da matriz de LEDs
 void gpio_irq_handler(uint gpio, uint32_t events); // Função de interrupção para o botão B
 void calculate_flood_percentages(
     joystick_data_t *joydata,
@@ -60,11 +61,12 @@ int main()
     stdio_init_all();
 
     // Cria a fila para compartilhamento de valor do joystick
-    xQueueJoystickData = xQueueCreate(7, sizeof(joystick_data_t));
+    xQueueJoystickData = xQueueCreate(10, sizeof(joystick_data_t));
 
     // Criação das tasks
     xTaskCreate(vJoystickTask, "Joystick Task", 256, NULL, 2, NULL);
     xTaskCreate(vDisplayTask, "Display Task", 512, NULL, 2, NULL);
+    xTaskCreate(vLedMatrixTask, "LED Matrix Task", 256, NULL, 1, NULL);
     xTaskCreate(vLedRGBTask, "LED RGB Task", 256, NULL, 1, NULL);
     xTaskCreate(vBuzzerTask, "Buzzer Task", 256, NULL, 1, NULL);
 
@@ -151,7 +153,7 @@ void vDisplayTask(void *params)
             ssd1306_send_data(&ssd);
         }
 
-        vTaskDelay(pdMS_TO_TICKS(100)); // Atualiza a cada 100ms
+        vTaskDelay(pdMS_TO_TICKS(150)); // Atualiza a cada 150ms
     }
 }
 
@@ -176,13 +178,14 @@ void vLedRGBTask(void *params)
 
             if (flood_status == STATUS_ALERT)
             {
-                set_led_red(); // Acende o LED vermelho
+                set_led_red();                  // Acende o LED vermelho
                 vTaskDelay(pdMS_TO_TICKS(100)); // Aguarda 100ms
-                turn_off_leds(); // Desliga os LEDs
+                turn_off_leds();                // Desliga os LEDs
                 vTaskDelay(pdMS_TO_TICKS(100)); // Aguarda 100ms
             }
-            else {
-                set_led_green(); // Acende o LED verde
+            else
+            {
+                set_led_green();                // Acende o LED verde
                 vTaskDelay(pdMS_TO_TICKS(100)); // Aguarda 100ms
             }
         }
@@ -219,14 +222,16 @@ void vBuzzerTask(void *params)
                 vTaskDelay(pdMS_TO_TICKS(100));
                 buzzer_on = true; // Buzzer ligado
             }
-            else if (rain_volume_percent >= 80.0f) {
+            else if (rain_volume_percent >= 80.0f)
+            {
                 play_tone(BUZZER_A_PIN, 784);
                 vTaskDelay(pdMS_TO_TICKS(100));
                 stop_tone(BUZZER_A_PIN);
                 vTaskDelay(pdMS_TO_TICKS(100));
                 buzzer_on = true; // Buzzer ligado
             }
-            else if (water_level_percent >= 70.0f) {
+            else if (water_level_percent >= 70.0f)
+            {
                 play_tone(BUZZER_B_PIN, 450);
                 vTaskDelay(pdMS_TO_TICKS(100));
                 stop_tone(BUZZER_B_PIN);
@@ -235,11 +240,65 @@ void vBuzzerTask(void *params)
             }
             else if (buzzer_on)
             {
-                stop_tone(BUZZER_A_PIN); // Para o buzzer
-                stop_tone(BUZZER_B_PIN); // Para o buzzer
+                stop_tone(BUZZER_A_PIN);        // Para o buzzer
+                stop_tone(BUZZER_B_PIN);        // Para o buzzer
                 vTaskDelay(pdMS_TO_TICKS(100)); // Atualiza a cada 100ms
-                buzzer_on = false; // Buzzer desligado
+                buzzer_on = false;              // Buzzer desligado
             }
+        }
+        vTaskDelay(pdMS_TO_TICKS(100)); // Aguarda 100ms
+    }
+}
+
+// Task para controle da matriz de LEDs
+void vLedMatrixTask(void *pvParameters)
+{
+    joystick_data_t joydata;
+    float rain_volume_percent = 0.0f;
+    float water_level_percent = 0.0f;
+    flood_status_t flood_status = STATUS_NORMAL;
+
+    ws2812b_init(LED_MATRIX_PIN);
+
+    while (true)
+    {
+        if (xQueueReceive(xQueueJoystickData, &joydata, portMAX_DELAY) == pdTRUE)
+        {
+            // Verifica o status de cheia/inundação
+            calculate_flood_percentages(&joydata, &rain_volume_percent, &water_level_percent);
+            flood_status = get_flood_alert_status(rain_volume_percent, water_level_percent);
+
+            ws2812b_clear(); // Limpa a matriz de LEDs
+
+            if (flood_status == STATUS_ALERT)
+            {
+                ws2812b_set_led(22, 8, 0, 0); // Define a cor do LED na posição 22
+                ws2812b_set_led(16, 8, 0, 0); // Define a cor do LED na posição 16
+                ws2812b_set_led(18, 8, 0, 0); // Define a cor do LED na posição 18
+                ws2812b_set_led(10, 8, 0, 0); // Define a cor do LED na posição 10
+                ws2812b_set_led(14, 8, 0, 0); // Define a cor do LED na posição 14
+
+                for (int i = 5; i < LED_MATRIX_COL * 2; i++)
+                {
+                    ws2812b_set_led(i, 8, 0, 0); // Define a cor do LED na posição i
+                }
+
+                ws2812b_set_led(1, 0, 0, 8);    // Define a cor do LED na posição 1
+                ws2812b_set_led(3, 0, 0, 8);    // Define a cor do LED na posição 3
+                ws2812b_write();                // Atualiza a matriz de LEDs
+                vTaskDelay(pdMS_TO_TICKS(100)); // Aguarda 100ms
+
+                ws2812b_set_led(1, 0, 0, 0);    // Define a cor do LED na posição 1
+                ws2812b_set_led(3, 0, 0, 0);    // Define a cor do LED na posição 3
+                ws2812b_write();                // Atualiza a matriz de LEDs
+                vTaskDelay(pdMS_TO_TICKS(100)); // Aguarda 100ms
+            }
+
+            ws2812b_write(); // Atualiza a matriz de LEDs
+        }
+        else
+        {
+            vTaskDelay(pdMS_TO_TICKS(50)); // Aguarda 50ms
         }
     }
 }

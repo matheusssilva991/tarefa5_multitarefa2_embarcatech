@@ -10,6 +10,7 @@
 #define LED_MATRIX_ROW 5
 #define LED_MATRIX_COL 5
 #define LED_MATRIX_SIZE (LED_MATRIX_ROW * LED_MATRIX_COL) // 5x5 = 25 LEDs
+#define LED_MATRIX_PIN 7 // Pino GPIO para controle da matriz de LEDs
 
 
 // Tipos de dados.
