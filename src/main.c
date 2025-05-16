@@ -20,7 +20,6 @@
 
 #define ADC_JOYSTICK_X 26
 #define ADC_JOYSTICK_Y 27
-#define tam_quad 10
 
 // Estruturas de dados
 typedef struct
@@ -38,8 +37,7 @@ typedef enum
 // Protótipos das funções
 void vJoystickTask(void *pvParameters);            // Task para leitura do joystick
 void vDisplayTask(void *pvParameters);             // Task para exibição no display
-void vLedGreenTask(void *pvParameters);            // Task para controle do LED verde
-void vLedBlueTask(void *pvParameters);             // Task para controle do LED azul
+void vLedRGBTask(void *pvParameters);              // Task para controle do LED RGB
 void gpio_irq_handler(uint gpio, uint32_t events); // Função de interrupção para o botão B
 void calculate_flood_percentages(
     joystick_data_t *joydata,
@@ -66,8 +64,7 @@ int main()
     // Criação das tasks
     xTaskCreate(vJoystickTask, "Joystick Task", 256, NULL, 1, NULL);
     xTaskCreate(vDisplayTask, "Display Task", 512, NULL, 1, NULL);
-    xTaskCreate(vLedGreenTask, "LED red Task", 256, NULL, 1, NULL);
-    xTaskCreate(vLedBlueTask, "LED blue Task", 256, NULL, 1, NULL);
+    xTaskCreate(vLedRGBTask, "LED RGB Task", 256, NULL, 1, NULL);
 
     // Inicia o agendador
     vTaskStartScheduler();
@@ -127,17 +124,27 @@ void vDisplayTask(void *params)
             snprintf(water_level_str, sizeof(water_level_str), "%.2f%%", water_level_percent);
             snprintf(rain_volume_str, sizeof(rain_volume_str), "%.2f%%", rain_volume_percent);
 
-            ssd1306_fill(&ssd, !color);                        // Limpa a tela
-            ssd1306_rect(&ssd, 0, 0, 128, 64, color, false);    // Desenha o retângulo
-            ssd1306_draw_string(&ssd, "N. Agua:", 5, 18);      // Exibe o título
-            ssd1306_draw_string(&ssd, water_level_str, 5, 28); // Exibe o nível de água
-            ssd1306_draw_string(&ssd, "V. chuva:", 5, 42);     // Exibe o título
-            ssd1306_draw_string(&ssd, rain_volume_str, 5, 52); // Exibe o volume de chuva
+            ssd1306_fill(&ssd, false); // Limpa a tela
 
             if (flood_status == STATUS_ALERT)
-                draw_centered_text(&ssd, "!! ALERTA !!", 4); // Exibe alerta
+            {
+                color = !color;                                   // Alterna a cor do retângulo
+                ssd1306_rect(&ssd, 0, 0, 128, 64, !color, color); // Desenha o retângulo
+                ssd1306_rect(&ssd, 2, 2, 124, 60, color, false);  // Desenha o retângulo
+                draw_centered_text(&ssd, "!! ALERTA !!", 5);      // Exibe alerta
+            }
             else
-                draw_centered_text(&ssd, "NORMAL", 4); // Exibe normal
+            {
+                color = true;                                     // Reseta a cor
+                ssd1306_rect(&ssd, 0, 0, 128, 64, color, !color); // Desenha o retângulo
+                ssd1306_rect(&ssd, 2, 2, 124, 60, color, !color);  // Desenha o retângulo
+                draw_centered_text(&ssd, "NORMAL", 5);            // Exibe normal
+            }
+
+            ssd1306_draw_string(&ssd, "N. Agua:", 7, 18);      // Exibe o título
+            ssd1306_draw_string(&ssd, water_level_str, 7, 28); // Exibe o nível de água
+            ssd1306_draw_string(&ssd, "V. chuva:", 7, 42);     // Exibe o título
+            ssd1306_draw_string(&ssd, rain_volume_str, 7, 52); // Exibe o volume de chuva
 
             ssd1306_send_data(&ssd);
         }
@@ -147,50 +154,28 @@ void vDisplayTask(void *params)
 }
 
 // Task para controle do LED verde
-void vLedGreenTask(void *params)
+void vLedRGBTask(void *params)
 {
-    gpio_set_function(GREEN_LED_PIN, GPIO_FUNC_PWM);   // Configura GPIO como PWM
-    uint slice = pwm_gpio_to_slice_num(GREEN_LED_PIN); // Obtém o slice de PWM
-    pwm_set_wrap(slice, 100);                          // Define resolução (0–100)
-    pwm_set_chan_level(slice, PWM_CHAN_B, 0);          // Duty inicial
-    pwm_set_enabled(slice, true);                      // Ativa PWM
-
     joystick_data_t joydata;
+    float rain_volume_percent = 0.0f;
+    float water_level_percent = 0.0f;
+    flood_status_t flood_status = STATUS_NORMAL;
+
+    init_led(GREEN_LED_PIN); // Inicializa o LED verde
+    init_led(RED_LED_PIN);   // Inicializa o LED vermelho
+
     while (true)
     {
         if (xQueueReceive(xQueueJoystickData, &joydata, portMAX_DELAY) == pdTRUE)
         {
-            // Brilho proporcional ao desvio do centro
-            int16_t center_desviation = (int16_t)joydata.x_pos - 2000;
-            if (center_desviation < 0)
-                center_desviation = -center_desviation;
-            uint16_t pwm_value = (center_desviation * 100) / 2048;
-            pwm_set_chan_level(slice, PWM_CHAN_B, pwm_value);
-        }
-        vTaskDelay(pdMS_TO_TICKS(50)); // Atualiza a cada 50ms
-    }
-}
+            // Verifica o status de cheia/inundação
+            calculate_flood_percentages(&joydata, &rain_volume_percent, &water_level_percent);
+            flood_status = get_flood_alert_status(rain_volume_percent, water_level_percent);
 
-// Task para controle do LED azul
-void vLedBlueTask(void *params)
-{
-    gpio_set_function(BLUE_LED_PIN, GPIO_FUNC_PWM);   // Configura GPIO como PWM
-    uint slice = pwm_gpio_to_slice_num(BLUE_LED_PIN); // Obtém o slice de PWM
-    pwm_set_wrap(slice, 100);                         // Define resolução (0–100)
-    pwm_set_chan_level(slice, PWM_CHAN_A, 0);         // Duty inicial
-    pwm_set_enabled(slice, true);                     // Ativa PWM
-
-    joystick_data_t joydata;
-    while (true)
-    {
-        if (xQueueReceive(xQueueJoystickData, &joydata, portMAX_DELAY) == pdTRUE)
-        {
-            // Brilho proporcional ao desvio do centro
-            int16_t center_deviation = (int16_t)joydata.y_pos - 2048;
-            if (center_deviation < 0)
-                center_deviation = -center_deviation;
-            uint16_t pwm_value = (center_deviation * 100) / 2048;
-            pwm_set_chan_level(slice, PWM_CHAN_A, pwm_value);
+            if (flood_status == STATUS_ALERT)
+                set_led_red(); // Acende o LED vermelho
+            else
+                set_led_green(); // Acende o LED verde
         }
         vTaskDelay(pdMS_TO_TICKS(50)); // Atualiza a cada 50ms
     }
